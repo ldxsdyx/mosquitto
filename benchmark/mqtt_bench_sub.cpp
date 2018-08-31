@@ -30,6 +30,7 @@ int g_iHandleCount = 1;
 volatile int g_iRun = 1;
 int g_iSSL = 0;
 int g_iQOS = 1;
+char* g_pTopicPre = (char *)"mqtt_test";
 
 
 string g_sServerIp;
@@ -91,10 +92,10 @@ struct ThreadInfo{
             pHandleInfo[i].pvMsg->iHandleId = i;
             pHandleInfo[i].pvMsg->iTId = iParamTid;
             if(g_iTopicMode == 0){
-                sprintf(pHandleInfo[i].pTopic, "mqtt_test2");
+                sprintf(pHandleInfo[i].pTopic, "%s", g_pTopicPre);
             }
             else{
-                sprintf(pHandleInfo[i].pTopic, "mqtt_test2/+/tid_%d/hid_%d", iParamTid, i);
+                sprintf(pHandleInfo[i].pTopic, "%s/+/tid_%d/hid_%d", g_pTopicPre, iParamTid, i);
             }
         }
         Change();
@@ -272,11 +273,11 @@ void printThreadInfo(ThreadInfo* pLastAllThread){
 }
 int EpollCallbackSub(void* pData, epoll_event* pEvent){
     //printf("get event %d %d\n", ((SessionInfo*)((struct mosquitto *)pData)->userdata)->iFd, pEvent->events);
-    return mosquitto_loop((struct mosquitto *)pData, -1, 1);
+    return mosquitto_loop_simple((struct mosquitto *)pData, 1, 3);
     //if(mosquitto_want_write((struct mosquitto *)pData))
     //    mosquitto_loop_write((struct mosquitto *)pData, 1);
     //return mosquitto_loop_read((struct mosquitto *)pData, 1);
-    return mosquitto_loop_misc((struct mosquitto *)pData);
+    //return mosquitto_loop_misc((struct mosquitto *)pData);
 }
 
 
@@ -297,13 +298,17 @@ void addHandle(CEpoll & vMyEpoll, int iTid, int iHid){
         g_vLockVec.unlock();
         return;
     }
-    string &sTopic = g_vTopicVec.front();
+    string sTopic = g_vTopicVec.front();
+    g_vTopicVec.pop_front();
+    if(g_vTopicVec.size() == 0)
+        g_bHasNewTopic = false;
+    g_vLockVec.unlock();
     char pvClientId[100];
     SessionInfo * pSInfo = new SessionInfo;
     pSInfo->iHid = iHid;
     pSInfo->iTid = iTid;
     pSInfo->uNeedId = 0;
-    pSInfo->sTopic = sTopic;
+    pSInfo->sTopic = std::move(sTopic);
     sprintf(pvClientId, "subv2%d_%d", iTid, iHid);
     struct mosquitto *pMos= mosquitto_new(pvClientId, true, pSInfo);
     if(g_iSSL){
@@ -322,32 +327,28 @@ void addHandle(CEpoll & vMyEpoll, int iTid, int iHid){
     mosquitto_message_callback_set(pMos, on_message);
     
     mosquitto_publish_callback_set(pMos,on_subscribe);
-    int rc = mosquitto_connect(pMos, g_sServerIp.c_str(), g_iServerPort, 60);
+    int rc = mosquitto_connect_async(pMos, g_sServerIp.c_str(), g_iServerPort, 60);
     if(rc != MOSQ_ERR_SUCCESS){
         printf("connect failed %s %d", g_sServerIp.c_str(), g_iServerPort);
-        g_vLockVec.unlock();
         return;
     }
     int sock = mosquitto_socket(pMos);
     vMyEpoll.eventAdd( sock, true, true, pMos, EpollCallbackSub);
-    g_vTopicVec.pop_front();
-    if(g_vTopicVec.size() == 0)
-        g_bHasNewTopic = false;
-    g_vLockVec.unlock();
+
     pSInfo->iFd = sock;
     printf("tid: %d, hid %d, topic:%s\n", iTid, iHid, sTopic.c_str());
 }
 int main(int argc, char *argv[])
 {
-	if(argc != 9){
-		printf("Usage: %s ipaddr port thread_count conn_per_thread topic_mode client_count ssl(0|1) qos\n", argv[0]);
+	if(argc != 10){
+		printf("Usage: %s ipaddr port thread_count conn_per_thread topic_mode client_count ssl(0|1) qos topic_pre\n", argv[0]);
 		return -1;
 	}
 	printf("Start test:\nipaddr:\t%s\nport:\t%d\nthread_count:\t%d\n"
-	"conn_per_thread:\t%d\ntopic_mode:\t%s\nconn_count:\t%d\nclient_count:\t%d\nqos:\t%d\n"
-	"ssl:\t%d\n==============\n",
+	"conn_per_thread:\t%d\ntopic_mode:\t%s\nconn_count:\t%d\nclient_count:\t%d\n"
+	"ssl:\t%d\nqos:\t%d\ntopic_pre:\t%s\n==============\n",
 	argv[1], atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5])==0?"0 single":"1 mult",
-	atoi(argv[3])*atoi(argv[4]), atoi(argv[6]), atoi(argv[7]), atoi(argv[8]));
+	atoi(argv[3])*atoi(argv[4]), atoi(argv[6]), atoi(argv[7]), atoi(argv[8]), argv[9]);
 	
 	g_sServerIp = argv[1];
 	g_iServerPort = atoi(argv[2]);
@@ -357,6 +358,7 @@ int main(int argc, char *argv[])
 	g_iClientCount = atoi(argv[6]);
     g_iSSL = atoi(argv[7]);
     g_iQOS = atoi(argv[8]);
+    g_pTopicPre = (char*)argv[9];
 	mosquitto_lib_init();
     signalDeal();
     std::thread **sendingThreads = (thread**)malloc(sizeof(thread*) * g_iThreadCount);
@@ -376,13 +378,16 @@ int main(int argc, char *argv[])
 			int rc;
 			char pvClientId[100];
             CEpoll vMyEpoll;
-            vMyEpoll.Init(10000);
+            vMyEpoll.Init(g_iThreadCount*2);
             int iSid = 0;
             g_pAllThread[i].Change();
+            int iPerConn = 0;
 			while(g_iRun){
                 vMyEpoll.doEpoll(1);
-                if(g_bHasNewTopic){
+                iPerConn = 0;
+                while(g_bHasNewTopic && iPerConn< 20){
                     addHandle(vMyEpoll, i, iSid++);
+                    iPerConn++;
                 }
                 /*for(int im = 0; im< g_iHandleCount; im++){
 				    mosquitto_loop(pAllMos[im], -1, 1);
@@ -423,7 +428,7 @@ int main(int argc, char *argv[])
     				return;
     			}
                 while(g_iRun){
-                    mosquitto_loop(pMMos, -1, 1);
+                    mosquitto_loop(pMMos, 1, 10);
                 }
         });
 

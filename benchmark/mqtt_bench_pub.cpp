@@ -29,6 +29,7 @@ int g_iQOS = 1;
 int g_iShortConn = 0;
 string g_sServerIp;
 int g_iServerPort;
+char* g_pTopicPre = (char *)"mqtt_test";
 map<unsigned long long, unsigned long long> g_vLastIdMap;
 
 struct ThreadLocalInfo{
@@ -104,10 +105,10 @@ struct ThreadInfo{
             pHandleInfo[i].pvMsg->iHandleId = i;
             pHandleInfo[i].pvMsg->iTId = iParamTid;
             if(g_iTopicMode == 0){
-                sprintf(pHandleInfo[i].pTopic, "mqtt_test2");
+                sprintf(pHandleInfo[i].pTopic, "%s", g_pTopicPre);
             }
             else{
-                sprintf(pHandleInfo[i].pTopic, "mqtt_test2/cid_%d/tid_%d/hid_%d", g_iClientId, iParamTid, i);
+                sprintf(pHandleInfo[i].pTopic, "%s/cid_%d/tid_%d/hid_%d", g_pTopicPre, g_iClientId, iParamTid, i);
             }
         }
         Change();
@@ -453,12 +454,12 @@ void addHandle(int iTid, int iHid, CEpoll * pvMyEpoll, MyTimer * pvMyTimer, Sess
 }
 int main(int argc, char *argv[])
 {
-	if(argc != 12){
-		printf("Usage: %s ipaddr port thread_count conn_per_thread payload_len topic_mode clientid sleepMs ssl(0|1) short_connect(0|1) qos\n", argv[0]);
+	if(argc != 13){
+		printf("Usage: %s ipaddr port thread_count conn_per_thread payload_len topic_mode clientid sleepMs ssl(0|1) short_connect(0|1) qos topic_pre\n", argv[0]);
 		return -1;
 	}
-	printf("Start test:\nipaddr:\t%s\nport:\t%d\nthread_count:\t%d\nconn_per_thread:\t%d\npayload_len:\t%d\ntopic_mode:\t%s\nconn_count:\t%d\nclientid:\t%d\nsleep ms:\t%d\nssl:\t%d\nshort_connect:\t%d\nqos:\t%d\n==============\n",
-	argv[1], atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]), atoi(argv[6])==0?"0 single":"1 mult", atoi(argv[3])*atoi(argv[4]), atoi(argv[7]), atoi(argv[8]), atoi(argv[9]), atoi(argv[10]), atoi(argv[11]));
+	printf("Start test:\nipaddr:\t%s\nport:\t%d\nthread_count:\t%d\nconn_per_thread:\t%d\npayload_len:\t%d\ntopic_mode:\t%s\nconn_count:\t%d\nclientid:\t%d\nsleep ms:\t%d\nssl:\t%d\nshort_connect:\t%d\nqos:\t%d\ntopic_pre:\t%s\n==============\n",
+	argv[1], atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]), atoi(argv[6])==0?"0 single":"1 mult", atoi(argv[3])*atoi(argv[4]), atoi(argv[7]), atoi(argv[8]), atoi(argv[9]), atoi(argv[10]), atoi(argv[11]), argv[12]);
 	g_sServerIp = argv[1];
 	g_iServerPort = atoi(argv[2]);
 	g_iThreadCount = atoi(argv[3]);
@@ -470,6 +471,7 @@ int main(int argc, char *argv[])
     g_iSSL = atoi(argv[9]);
     g_iShortConn = atoi(argv[10]);
     g_iQOS = atoi(argv[11]);
+    g_pTopicPre = (char*)argv[12];
 	if(g_iPayloadLen < 40){
 		printf("payload_len is too small.\n");
 		exit(-1);
