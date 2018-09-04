@@ -101,8 +101,16 @@ void MyTimer::AddTimerPoint(TimePoint *pvTimePoint)
 void MyTimer::AddTimerPoint(TimeCallBack_t vFunc, void * pData, uint64_t uInterval, bool bLoop)
 {
     uint64_t uNow = get_now();
-    if(uInterval > 0)
+    if(uInterval > 0){
         uNow += rand() % uInterval;
+        if(bLoop){
+            uNow += rand() % uInterval;
+            uNow += rand() % uInterval;
+            uNow += rand() % uInterval;
+            uNow += rand() % uInterval;
+            uNow += rand() % uInterval;
+        }
+    }
     TimePoint *pvTimePoint = new TimePoint;
     pvTimePoint->uTime = uNow;
     pvTimePoint->bIsInterval = bLoop;

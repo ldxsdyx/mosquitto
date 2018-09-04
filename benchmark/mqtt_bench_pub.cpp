@@ -84,7 +84,7 @@ struct SessionInfo{
     MyTimer *pvMyTimer;
     struct mosquitto *pMos;
     char pClientId[50];
-    bool bConn;
+    char cConn;
 };
 
 struct ThreadInfo{
@@ -197,16 +197,16 @@ int EpollCallbackPub(void* pData, epoll_event* pEvent){
     //if(pEvent->events &EPOLLIN)
     //    printf("get event sock%d %d %p\n", mosquitto_socket((struct mosquitto *)pData), pEvent->events, pData);
     int iRet;
-    iRet = mosquitto_loop_simple((struct mosquitto *)pData, 1, 3);
+    iRet = mosquitto_loop_simple(((SessionInfo * )pData)->pMos, 1, 3);
     if(iRet != 0){
         printf("mosquitto_loop failed %d %s\n", iRet, mosquitto_strerror(iRet));
     }
     return iRet;
-    mosquitto_loop_read((struct mosquitto *)pData, 10);
-    if(mosquitto_want_write((struct mosquitto *)pData))
-        mosquitto_loop_write((struct mosquitto *)pData, 1);
+    /*mosquitto_loop_read(pSInfo->pMos, 10);
+    if(mosquitto_want_write(pSInfo->pMos))
+        mosquitto_loop_write(pSInfo->pMos, 1);
     //return mosquitto_loop_misc((struct mosquitto *)pData);
-    return 0;
+    return 0;*/
 }
 
 void on_connect(struct mosquitto *mosq, void *obj, int rc)
@@ -216,9 +216,15 @@ void on_connect(struct mosquitto *mosq, void *obj, int rc)
 		printf("on_connect failed %d\n", rc);
 		return;
 	}else{
-        int iTid = ((SessionInfo*)obj)->iTid;
-        int iHid = ((SessionInfo*)obj)->iHid;
+        SessionInfo* pSInfo = (SessionInfo*)obj;
+        int iTid = pSInfo->iTid;
+        int iHid = pSInfo->iHid;
         ThreadInfo *pThread = &g_pAllThread[iTid];
+        if(pSInfo->cConn != 1){
+            printf("connect state is %d, Hid %d, state %d\n", iTid, iHid, pSInfo->cConn);
+            return;
+        }
+        pSInfo->cConn = 2;
         g_vThreadConn[iTid].iConnCount++;
         //printf("test tid add to %d %d\n", iTid ,g_vThreadConn[iTid].iConnCount);
         if( ((SessionInfo*)obj)->bFirst){
@@ -240,14 +246,21 @@ void on_connect(struct mosquitto *mosq, void *obj, int rc)
 
 void on_disconnect(struct mosquitto *mosq, void *obj, int rc)
 {
+    SessionInfo* pSInfo = (SessionInfo*)obj;
 	//printf("on_disconnect %d\n",mosquitto_socket(mosq));
     //addHandle(pSInfo->iTid, pSInfo->iHid, pSInfo->pEpoll, pSInfo);
-    if(((SessionInfo*)obj)->bConn){
-        g_vThreadConn[((SessionInfo*)obj)->iTid].iConnCount--;
+    if(pSInfo->cConn!=2){
+        printf("disconnect state is %d\n", pSInfo->cConn);
     }
-    if(g_vThreadConn[((SessionInfo*)obj)->iTid].iConnCount < 0)
-        printf("fuck here %d\n", g_vThreadConn[((SessionInfo*)obj)->iTid].iConnCount);
-    ((SessionInfo*)obj)->bConn = false;
+    if(pSInfo->cConn == 2){
+        g_vThreadConn[pSInfo->iTid].iConnCount--;
+    }
+    else if(pSInfo->cConn == 0)
+        return;
+    
+    if(g_vThreadConn[pSInfo->iTid].iConnCount < 0)
+        printf("fuck here redisconnect %d %d %d\n", pSInfo->iTid, pSInfo->iHid, g_vThreadConn[pSInfo->iTid].iConnCount);
+    pSInfo->cConn = 0;
     if(g_iShortConn && (!g_iSleepUs)){
         addHandleCallBack(obj);
         //((SessionInfo*)obj)->pvMyTimer->AddTimerPoint(addHandleCallBack, obj, 0, false);
@@ -314,9 +327,9 @@ void my_log_callback(struct mosquitto *mosq, void *obj, int level, const char *s
 
 int addHandleCallBack(void *pData){
     SessionInfo * pSInfo = (SessionInfo * )pData;
-    if(pSInfo->bConn)
+    if(pSInfo->cConn > 0)
         return 0;
-    pSInfo->bConn = true;
+    pSInfo->cConn = 1;
     struct mosquitto *pMos;
     int iRet;
 
@@ -377,7 +390,7 @@ int addHandleCallBack(void *pData){
         return -1;
     }
     int sock = mosquitto_socket(pMos);
-    pSInfo->pEpoll->eventAdd( sock, true, true, pMos, EpollCallbackPub);
+    pSInfo->pEpoll->eventAdd( sock, true, true, pSInfo, EpollCallbackPub);
     pSInfo->iFd = sock;
     //printf("tid: topic:%s\n", pSInfo->sTopic.c_str());
     return 0;
@@ -394,7 +407,7 @@ void addHandle(int iTid, int iHid, CEpoll * pvMyEpoll, MyTimer * pvMyTimer, Sess
         pSInfo->uNeedId = 0;
         pSInfo->bFirst = true;
         pSInfo->pEpoll = pvMyEpoll;
-        pSInfo->bConn = false;
+        pSInfo->cConn = 0;
         pSInfo->pvMyTimer =  pvMyTimer;
         sprintf(pSInfo->pClientId, "pub%d_%d_%d", g_iClientId, iTid, iHid);
         if(g_iSleepUs){
@@ -448,7 +461,7 @@ void addHandle(int iTid, int iHid, CEpoll * pvMyEpoll, MyTimer * pvMyTimer, Sess
         return;
     }
     int sock = mosquitto_socket(pMos);
-    pvMyEpoll->eventAdd( sock, true, true, pMos, EpollCallbackPub);
+    pvMyEpoll->eventAdd( sock, true, true, pSInfo, EpollCallbackPub);
     pSInfo->iFd = sock;
     //printf("tid: %d, hid %d, sockfd: %d, topic:%s\n", iTid, iHid, sock, pSInfo->sTopic.c_str());
 }
@@ -500,7 +513,7 @@ int main(int argc, char *argv[])
             }
             g_pAllThread[i].Change();
 			while(g_iRun){
-                vMyEpoll.doEpoll(1);
+                vMyEpoll.doEpoll(0);
                 vMyTimer.DoTimer();
 			}
 		});
